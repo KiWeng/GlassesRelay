@@ -345,7 +345,7 @@ class StreamingService : Service(), ConnectChecker {
     // ─────────────────────────────────────────────────────────────────
 
     override fun onConnectionStarted(url: String) {
-        Log.d(TAG, "RTMP connecting to: $url")
+        Log.d(TAG, "RTMP connecting to: ${UrlUtils.sanitizeRtmpUrl(url)}")
         _streamState.value = StreamState(isConnecting = true, statusMessage = "Connecting…")
     }
 

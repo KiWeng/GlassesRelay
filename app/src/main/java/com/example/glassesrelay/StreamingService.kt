@@ -77,6 +77,8 @@ class StreamingService : Service(), ConnectChecker {
         val isStreaming: Boolean = false,
         val isConnecting: Boolean = false,
         val fps: Int = 0,
+        val width: Int = 0,
+        val height: Int = 0,
         val statusMessage: String = "Idle",
         val errorMessage: String? = null,
         val latestFrame: Bitmap? = null
@@ -281,8 +283,12 @@ class StreamingService : Service(), ConnectChecker {
 
             val bitmap = BitmapFactory.decodeByteArray(out, 0, out.size) ?: return
 
-            // Post bitmap to StateFlow for UI to render
-            _streamState.value = _streamState.value.copy(latestFrame = bitmap)
+            // Post bitmap and metadata to StateFlow for UI to render
+            _streamState.value = _streamState.value.copy(
+                latestFrame = bitmap,
+                width = videoFrame.width,
+                height = videoFrame.height
+            )
             frameCount++
 
         } catch (e: Exception) {

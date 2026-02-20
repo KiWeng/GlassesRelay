@@ -285,13 +285,15 @@ fun GlassesRelayApp(
                     exit = fadeOut(tween(300))
                 ) {
                     Column {
-                        StreamStatusCard(
-                            isStreaming = isStreaming,
-                            isConnecting = isConnecting,
-                            fps = streamState.fps,
-                            statusMessage = streamState.statusMessage,
-                            errorMessage = streamState.errorMessage
-                        )
+                            StreamStatusCard(
+                                isStreaming = isStreaming,
+                                isConnecting = isConnecting,
+                                fps = streamState.fps,
+                                width = streamState.width,
+                                height = streamState.height,
+                                statusMessage = streamState.statusMessage,
+                                errorMessage = streamState.errorMessage
+                            )
                         
                         if (isStreaming && streamState.latestFrame != null) {
                             Spacer(modifier = Modifier.height(16.dp))
@@ -694,6 +696,8 @@ private fun StreamStatusCard(
     isStreaming: Boolean,
     isConnecting: Boolean,
     fps: Int,
+    width: Int,
+    height: Int,
     statusMessage: String,
     errorMessage: String?
 ) {
@@ -753,7 +757,7 @@ private fun StreamStatusCard(
                 StatusMetric(
                     icon = Icons.Filled.Videocam,
                     label = "Resolution",
-                    value = "720×1280"
+                    value = if (isStreaming && width > 0) "${width}×${height}" else "---"
                 )
                 StatusMetric(
                     icon = Icons.Filled.CellTower,

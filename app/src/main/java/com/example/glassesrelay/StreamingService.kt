@@ -94,6 +94,9 @@ class StreamingService : Service(), ConnectChecker {
     private var frameCount = 0L
     private var lastFpsTimestamp = 0L
 
+    private var currentQuality: String = "HIGH"
+    private var currentFps: Int = 30
+
     // ─────────────────────────────────────────────────────────────────
     //  Lifecycle
     // ─────────────────────────────────────────────────────────────────
@@ -151,6 +154,9 @@ class StreamingService : Service(), ConnectChecker {
 
     private fun startStreaming(rtmpUrl: String, qualityStr: String, fps: Int) {
         if (_streamState.value.isStreaming || _streamState.value.isConnecting) return
+
+        currentQuality = qualityStr
+        currentFps = fps
 
         _streamState.value = StreamState(isConnecting = true, statusMessage = "Initializing Camera…")
 
@@ -340,7 +346,7 @@ class StreamingService : Service(), ConnectChecker {
     override fun onConnectionSuccess() {
         Log.d(TAG, "RTMP connected successfully")
         // RTMP link is up → start capturing from glasses
-        startDatCameraSession()
+        startDatCameraSession(currentQuality, currentFps)
     }
 
     override fun onConnectionFailed(reason: String) {

@@ -8,13 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.os.Build
-import java.io.ByteArrayOutputStream
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
@@ -273,15 +267,7 @@ class StreamingService : Service(), ConnectChecker {
             // Restore position
             buffer.position(originalPosition)
 
-            // Convert I420 to NV21 format which is supported by Android's YuvImage
-            val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
-            val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
-            val out = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
-                stream.toByteArray()
-            }
-
-            val bitmap = BitmapFactory.decodeByteArray(out, 0, out.size) ?: return
+            val bitmap = YuvConverter.i420ToBitmap(byteArray, videoFrame.width, videoFrame.height) ?: return
 
             // Post bitmap and metadata to StateFlow for UI to render
             _streamState.value = _streamState.value.copy(
@@ -296,20 +282,6 @@ class StreamingService : Service(), ConnectChecker {
         }
     }
 
-    // Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
-    private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
-        val output = ByteArray(input.size)
-        val size = width * height
-        val quarter = size / 4
-
-        input.copyInto(output, 0, 0, size) // Y is the same
-
-        for (n in 0 until quarter) {
-            output[size + n * 2] = input[size + quarter + n] // V first
-            output[size + n * 2 + 1] = input[size + n] // U second
-        }
-        return output
-    }
 
     fun stopStreaming() {
         frameCollectorJob?.cancel()

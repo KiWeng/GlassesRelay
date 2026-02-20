@@ -20,8 +20,9 @@ import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import android.view.Surface
+import com.pedro.library.generic.GenericStream
+import com.pedro.encoder.input.sources.audio.MicrophoneSource
 import com.pedro.common.ConnectChecker
-import com.pedro.library.rtmp.RtmpStream
 import com.meta.wearable.dat.camera.StreamSession
 import com.meta.wearable.dat.camera.startStreamSession
 import com.meta.wearable.dat.camera.types.StreamConfiguration
@@ -39,6 +40,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.onEach
 
 /**
  * Foreground service that bridges Meta DAT SDK video frames to an RTMP server.
@@ -89,7 +94,8 @@ class StreamingService : Service(), ConnectChecker {
 
     // ── Internals ───────────────────────────────────────────────────
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var rtmpStream: RtmpStream? = null
+    private var rtmpStream: GenericStream? = null
+    private val dynamicSource = DynamicBitmapSource()
     private var streamSession: StreamSession? = null
     private var frameCollectorJob: Job? = null
     private var fpsCounterJob: Job? = null
@@ -98,6 +104,7 @@ class StreamingService : Service(), ConnectChecker {
 
     private var currentQuality: String = "HIGH"
     private var currentFps: Int = 30
+    private val isProcessingFrame = AtomicBoolean(false)
 
     // ─────────────────────────────────────────────────────────────────
     //  Lifecycle
@@ -115,33 +122,32 @@ class StreamingService : Service(), ConnectChecker {
             return START_NOT_STICKY
         }
 
-        val rtmpUrl = intent?.getStringExtra(EXTRA_RTMP_URL)
+        val rtmpUrl = intent?.getStringExtra(EXTRA_RTMP_URL) ?: ""
         val qualityStr = intent?.getStringExtra(EXTRA_VIDEO_QUALITY) ?: "HIGH"
         val fps = intent?.getIntExtra(EXTRA_VIDEO_FPS, 30) ?: 30
 
-        if (rtmpUrl.isNullOrBlank()) {
-            Log.e(TAG, "No RTMP URL provided")
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
+        val notificationText = if (rtmpUrl.isBlank()) "Starting Local Preview…" else "Connecting to RTMP…"
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(
                 NOTIFICATION_ID, 
-                buildNotification("Connecting…"), 
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                buildNotification(notificationText), 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             )
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID, 
-                buildNotification("Connecting…"), 
+                buildNotification(notificationText), 
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
             )
         } else {
-            startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+            startForeground(NOTIFICATION_ID, buildNotification(notificationText))
         }
+
         startStreaming(rtmpUrl, qualityStr, fps)
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -160,10 +166,34 @@ class StreamingService : Service(), ConnectChecker {
         currentQuality = qualityStr
         currentFps = fps
 
-        _streamState.value = StreamState(isConnecting = true, statusMessage = "Initializing Camera…")
+        if (rtmpUrl.isBlank()) {
+            _streamState.value = StreamState(isConnecting = true, statusMessage = "Starting Preview…")
+            startDatCameraSession(qualityStr, fps)
+            return
+        }
 
-        // Skip RTMP for now, just start the camera directly
-        startDatCameraSession(qualityStr, fps)
+        _streamState.value = StreamState(isConnecting = true, statusMessage = "Connecting to RTMP…")
+
+        // 1. Initialize RootEncoder GenericStream with BitmapSource
+        rtmpStream = GenericStream(this, this, dynamicSource, MicrophoneSource()).apply {
+            val width = if (qualityStr == "HIGH") 720 else if (qualityStr == "MEDIUM") 480 else 360
+            val height = if (qualityStr == "HIGH") 1280 else if (qualityStr == "MEDIUM") 854 else 640
+            
+            // Prepare video encoder
+            if (!prepareVideo(width, height, VIDEO_BITRATE, fps)) {
+                Log.e(TAG, "Failed to prepare video encoder")
+                _streamState.value = StreamState(errorMessage = "Video encoder init failed")
+                return@apply
+            }
+            
+            // Prepare audio encoder
+            if (!prepareAudio(AUDIO_SAMPLE_RATE, true, 128_000)) {
+                Log.e(TAG, "Failed to prepare audio encoder")
+            }
+            
+            // Start the RTMP connection handshake
+            startStream(rtmpUrl)
+        }
     }
 
     /**
@@ -196,19 +226,28 @@ class StreamingService : Service(), ConnectChecker {
 
                 Log.d(TAG, "Starting stream with Quality: $quality, FPS: $fps")
 
-                // Start stream session using AutoDeviceSelector
-                val session = Wearables.startStreamSession(
-                    this@StreamingService,
-                    AutoDeviceSelector(),
-                    config
-                )
+                // Start stream session with detailed error logging
+                val session = try {
+                    Wearables.startStreamSession(
+                        this@StreamingService,
+                        AutoDeviceSelector(),
+                        config
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Wearables.startStreamSession CRASHED", e)
+                    Log.e(TAG, "Exception type: ${e.javaClass.simpleName}")
+                    Log.e(TAG, "Exception message: ${e.message}")
+                    e.printStackTrace()
+                    throw e // Re-throw to be caught by outer block
+                }
                 streamSession = session
 
-                _streamState.value = StreamState(
+                _streamState.value = _streamState.value.copy(
                     isStreaming = true,
-                    statusMessage = "LIVE"
+                    isConnecting = false,
+                    statusMessage = if (rtmpStream?.isStreaming == true) "LIVE" else "PREVIEW"
                 )
-                updateNotification("🔴 Streaming LIVE")
+                updateNotification(if (rtmpStream?.isStreaming == true) "🔴 Streaming LIVE" else "Previewing Mode")
 
                 // Observe the stream session state to handle unexpected disconnects
                 serviceScope.launch {
@@ -216,11 +255,8 @@ class StreamingService : Service(), ConnectChecker {
                         Log.d(TAG, "Stream session state changed: $state")
                         val stateStr = state.toString()
                         if (stateStr == "CLOSED" || stateStr == "ERROR") {
-                            _streamState.value = _streamState.value.copy(
-                                isStreaming = false,
-                                errorMessage = "Streaming stopped by glasses ($stateStr)",
-                                statusMessage = "Disconnected"
-                            )
+                            Log.w(TAG, "Glasses session ended: $stateStr")
+                            // If glasses stop, we must stop everything
                             stopStreaming()
                         }
                     }
@@ -243,9 +279,11 @@ class StreamingService : Service(), ConnectChecker {
 
                 // Collect video frames and relay to RTMP encoder
                 frameCollectorJob = serviceScope.launch(Dispatchers.Default) {
-                    session.videoStream.collect { videoFrame: VideoFrame ->
-                        relayVideoFrame(videoFrame)
-                    }
+                    session.videoStream
+                        .conflate() // Drop frames if collector is slower
+                        .collect { videoFrame ->
+                            relayVideoFrame(videoFrame)
+                        }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "DAT camera session failed", e)
@@ -261,29 +299,27 @@ class StreamingService : Service(), ConnectChecker {
      * via the Flow for the UI to preview.
      */
     private fun relayVideoFrame(videoFrame: VideoFrame) {
+        if (!isProcessingFrame.compareAndSet(false, true)) {
+            // Drop frame if already processing one - prevents pileups and crashes
+            return
+        }
+        
         try {
-            // VideoFrame contains raw I420 video data in a ByteBuffer
+            // 1. Convert and Decode Frame
             val buffer = videoFrame.buffer
             val dataSize = buffer.remaining()
             val byteArray = ByteArray(dataSize)
-
-            // Save current position
-            val originalPosition = buffer.position()
             buffer.get(byteArray)
-            // Restore position
-            buffer.position(originalPosition)
-
-            // Convert I420 to NV21 format which is supported by Android's YuvImage
+            
             val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
             val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
-            val out = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
-                stream.toByteArray()
-            }
+            val bitmap = ByteArrayOutputStream().use { stream ->
+                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 60, stream)
+                val jpeg = stream.toByteArray()
+                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+            } ?: return
 
-            val bitmap = BitmapFactory.decodeByteArray(out, 0, out.size) ?: return
-
-            // Post bitmap and metadata to StateFlow for UI to render
+            // 2. Post bitmap and metadata to StateFlow for UI to render
             _streamState.value = _streamState.value.copy(
                 latestFrame = bitmap,
                 width = videoFrame.width,
@@ -291,27 +327,72 @@ class StreamingService : Service(), ConnectChecker {
             )
             frameCount++
 
+            // 3. Relay to GenericStream's DynamicBitmapSource
+            rtmpStream?.let { stream ->
+                if (stream.isStreaming) {
+                    dynamicSource.pushBitmap(bitmap)
+                }
+            }
+
         } catch (e: Exception) {
-            Log.w(TAG, "Frame decode error", e)
+            Log.w(TAG, "Frame processing error", e)
+        } finally {
+            isProcessingFrame.set(false)
         }
     }
 
+
     // Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
     private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
-        val output = ByteArray(input.size)
+        val expectedSize = (width * height * 1.5).toInt()
+        if (input.size < expectedSize) {
+            Log.w(TAG, "Buffer size mismatch! Expected at least $expectedSize, got ${input.size}. Padding with zeros.")
+            val paddedInput = ByteArray(expectedSize)
+            input.copyInto(paddedInput, 0, 0, minOf(input.size, expectedSize))
+            return convertI420toNV21(paddedInput, width, height)
+        }
+
+        val output = ByteArray(expectedSize)
         val size = width * height
         val quarter = size / 4
 
-        input.copyInto(output, 0, 0, size) // Y is the same
+        try {
+            input.copyInto(output, 0, 0, size) // Y is the same
 
-        for (n in 0 until quarter) {
-            output[size + n * 2] = input[size + quarter + n] // V first
-            output[size + n * 2 + 1] = input[size + n] // U second
+            for (n in 0 until quarter) {
+                output[size + n * 2] = input[size + quarter + n] // V first
+                output[size + n * 2 + 1] = input[size + n] // U second
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Internal YUV conversion crash: ${e.message}")
         }
         return output
     }
 
     fun stopStreaming() {
+        Log.d(TAG, "stopStreaming called")
+        stopRtmp()
+        stopCamera()
+
+        // Only update status to "Stopped" if we didn't just set an error message
+        if (_streamState.value.errorMessage == null) {
+            _streamState.value = StreamState(statusMessage = "Stopped")
+        } else {
+            _streamState.value = _streamState.value.copy(isStreaming = false, isConnecting = false)
+        }
+    }
+
+    private fun stopRtmp() {
+        try {
+            rtmpStream?.stopStream()
+            rtmpStream?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping RTMP stream", e)
+        }
+        rtmpStream = null
+    }
+
+    private fun stopCamera() {
         frameCollectorJob?.cancel()
         frameCollectorJob = null
         fpsCounterJob?.cancel()
@@ -323,21 +404,6 @@ class StreamingService : Service(), ConnectChecker {
             Log.w(TAG, "Error closing stream session", e)
         }
         streamSession = null
-
-        try {
-            rtmpStream?.stopStream()
-            rtmpStream?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping RTMP stream", e)
-        }
-        rtmpStream = null
-
-        // Only update status to "Stopped" if we didn't just set an error message
-        if (_streamState.value.errorMessage == null) {
-            _streamState.value = StreamState(statusMessage = "Stopped")
-        } else {
-            _streamState.value = _streamState.value.copy(isStreaming = false, isConnecting = false)
-        }
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -345,20 +411,37 @@ class StreamingService : Service(), ConnectChecker {
     // ─────────────────────────────────────────────────────────────────
 
     override fun onConnectionStarted(url: String) {
-        Log.d(TAG, "RTMP connecting to: $url")
+        Log.d(TAG, "RTMP connection started: $url")
         _streamState.value = StreamState(isConnecting = true, statusMessage = "Connecting…")
     }
 
     override fun onConnectionSuccess() {
-        Log.d(TAG, "RTMP connected successfully")
+        Log.d(TAG, "RTMP connection success")
+        _streamState.value = _streamState.value.copy(
+            isStreaming = true,
+            isConnecting = false,
+            statusMessage = "Streaming to RTMP"
+        )
+        updateNotification("Streaming to RTMP...")
+        
         // RTMP link is up → start capturing from glasses
         startDatCameraSession(currentQuality, currentFps)
     }
 
     override fun onConnectionFailed(reason: String) {
         Log.e(TAG, "RTMP connection failed: $reason")
-        _streamState.value = StreamState(errorMessage = "RTMP failed: $reason")
+        _streamState.value = _streamState.value.copy(
+            isConnecting = false,
+            errorMessage = "RTMP failed: $reason",
+            statusMessage = "RTMP ERROR"
+        )
         updateNotification("Connection failed")
+        stopRtmp()
+        
+        // If camera isn't even running yet (handshake failed), start it for preview anyway
+        if (streamSession == null) {
+            startDatCameraSession(currentQuality, currentFps)
+        }
     }
 
     override fun onNewBitrate(bitrate: Long) {
@@ -367,10 +450,11 @@ class StreamingService : Service(), ConnectChecker {
 
     override fun onDisconnect() {
         Log.d(TAG, "RTMP disconnected")
-        _streamState.value = StreamState(statusMessage = "Disconnected")
-        updateNotification("Disconnected")
-        stopStreaming()
-        stopSelf()
+        _streamState.value = _streamState.value.copy(
+            statusMessage = "RTMP Disconnected"
+        )
+        updateNotification("Disconnected from server")
+        stopRtmp()
     }
 
     override fun onAuthError() {

@@ -202,6 +202,7 @@ fun GlassesRelayApp(
 
     var isFullScreen by remember { mutableStateOf(false) }
     var showFullScreenControls by remember { mutableStateOf(true) }
+    val coroutineScope = rememberCoroutineScope()
 
     // Auto-hide full-screen controls
     LaunchedEffect(showFullScreenControls, isFullScreen) {
@@ -346,8 +347,15 @@ fun GlassesRelayApp(
                             onStopStream()
                         } else {
                             if (registrationState is RegistrationState.Registered) {
-                                // Request Meta SDK camera permission before starting the stream
-                                metaCameraPermissionLauncher.launch(Permission.CAMERA)
+                                // Fix permission fatigue: check if already granted
+                                coroutineScope.launch {
+                                    val statusResult = Wearables.checkPermissionStatus(Permission.CAMERA)
+                                    if (statusResult.getOrNull() == PermissionStatus.Granted) {
+                                        onStartStream(rtmpUrl, selectedQuality, selectedFps)
+                                    } else {
+                                        metaCameraPermissionLauncher.launch(Permission.CAMERA)
+                                    }
+                                }
                             } else {
                                 // Launch the Meta SDK Registration flow
                                 Wearables.startRegistration(activity)

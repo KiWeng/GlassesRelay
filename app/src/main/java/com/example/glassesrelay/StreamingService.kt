@@ -53,11 +53,6 @@ class StreamingService : Service(), ConnectChecker {
         private const val TAG = "StreamingService"
         private const val CHANNEL_ID = "glasses_relay_stream"
         private const val NOTIFICATION_ID = 1
-        private const val VIDEO_WIDTH = 720
-        private const val VIDEO_HEIGHT = 1280
-        private const val VIDEO_BITRATE = 2_500_000  // 2.5 Mbps
-        private const val VIDEO_FPS = 30
-        private const val AUDIO_SAMPLE_RATE = 44100
 
         const val EXTRA_RTMP_URL = "extra_rtmp_url"
         const val EXTRA_VIDEO_QUALITY = "extra_video_quality" // "LOW", "MEDIUM", "HIGH"

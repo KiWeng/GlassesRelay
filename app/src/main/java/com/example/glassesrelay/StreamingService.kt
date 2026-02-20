@@ -99,6 +99,10 @@ class StreamingService : Service(), ConnectChecker {
     private var currentQuality: String = "HIGH"
     private var currentFps: Int = 30
 
+    // Buffer for JPEG compression to avoid allocations
+    // Initial size: 720 * 1280 / 2 = 460,800 bytes (approx 450KB)
+    private val frameBuffer = ReusableByteArrayOutputStream(VIDEO_WIDTH * VIDEO_HEIGHT / 2)
+
     // ─────────────────────────────────────────────────────────────────
     //  Lifecycle
     // ─────────────────────────────────────────────────────────────────
@@ -276,12 +280,11 @@ class StreamingService : Service(), ConnectChecker {
             // Convert I420 to NV21 format which is supported by Android's YuvImage
             val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
             val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
-            val out = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
-                stream.toByteArray()
-            }
 
-            val bitmap = BitmapFactory.decodeByteArray(out, 0, out.size) ?: return
+            frameBuffer.reset()
+            image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, frameBuffer)
+
+            val bitmap = BitmapFactory.decodeByteArray(frameBuffer.getBuffer(), 0, frameBuffer.getCount()) ?: return
 
             // Post bitmap and metadata to StateFlow for UI to render
             _streamState.value = _streamState.value.copy(
@@ -431,5 +434,10 @@ class StreamingService : Service(), ConnectChecker {
     private fun updateNotification(text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private class ReusableByteArrayOutputStream(size: Int) : ByteArrayOutputStream(size) {
+        fun getBuffer(): ByteArray = buf
+        fun getCount(): Int = count
     }
 }

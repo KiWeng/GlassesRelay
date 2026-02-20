@@ -556,6 +556,37 @@ private fun ConnectionCard(
 }
 
 @Composable
+private fun <T> SelectionRow(
+    title: String,
+    options: List<T>,
+    selectedOption: T,
+    onOptionSelected: (T) -> Unit,
+    optionLabel: (T) -> String,
+    enabled: Boolean
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            val isSelected = selectedOption == option
+            FilterChip(
+                selected = isSelected,
+                onClick = { if (enabled) onOptionSelected(option) },
+                label = { Text(optionLabel(option)) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = CyanAccent,
+                    selectedLabelColor = Color.Black
+                )
+            )
+        }
+    }
+}
+
+@Composable
 private fun StreamSettingsCard(
     selectedQuality: String,
     onQualityChange: (String) -> Unit,
@@ -585,42 +616,26 @@ private fun StreamSettingsCard(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Quality Selection
-            Text("Video Quality", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("LOW", "MEDIUM", "HIGH").forEach { quality ->
-                    val isSelected = selectedQuality == quality
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { if (enabled) onQualityChange(quality) },
-                        label = { Text(quality) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanAccent,
-                            selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
+            SelectionRow(
+                title = "Video Quality",
+                options = listOf("LOW", "MEDIUM", "HIGH"),
+                selectedOption = selectedQuality,
+                onOptionSelected = onQualityChange,
+                optionLabel = { it },
+                enabled = enabled
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             // FPS Selection
-            Text("Target FPS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(15, 30, 60).forEach { fps ->
-                    val isSelected = selectedFps == fps
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { if (enabled) onFpsChange(fps) },
-                        label = { Text("$fps FPS") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanAccent,
-                            selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
+            SelectionRow(
+                title = "Target FPS",
+                options = listOf(15, 30, 60),
+                selectedOption = selectedFps,
+                onOptionSelected = onFpsChange,
+                optionLabel = { "$it FPS" },
+                enabled = enabled
+            )
         }
     }
 }

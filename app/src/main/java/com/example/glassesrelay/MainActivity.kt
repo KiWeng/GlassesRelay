@@ -47,6 +47,7 @@ import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
 
@@ -95,7 +96,7 @@ class MainActivity : ComponentActivity() {
             GlassesRelayTheme {
                 GlassesRelayApp(
                     serviceStreamState = serviceStreamState,
-                    onStartStream = { rtmpUrl -> startStreamingService(rtmpUrl) },
+                    onStartStream = { rtmpUrl, quality, fps -> startStreamingService(rtmpUrl, quality, fps) },
                     onStopStream = { stopStreamingService() }
                 )
             }
@@ -123,9 +124,11 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
     }
 
-    private fun startStreamingService(rtmpUrl: String) {
+    private fun startStreamingService(rtmpUrl: String, quality: String, fps: Int) {
         val serviceIntent = Intent(this, StreamingService::class.java).apply {
             putExtra(StreamingService.EXTRA_RTMP_URL, rtmpUrl)
+            putExtra(StreamingService.EXTRA_VIDEO_QUALITY, quality)
+            putExtra(StreamingService.EXTRA_VIDEO_FPS, fps)
         }
         ContextCompat.startForegroundService(this, serviceIntent)
 
@@ -174,7 +177,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun GlassesRelayApp(
     serviceStreamState: StateFlow<StreamingService.StreamState>,
-    onStartStream: (String) -> Unit,
+    onStartStream: (String, String, Int) -> Unit,
     onStopStream: () -> Unit
 ) {
     val activity = LocalContext.current as Activity
@@ -193,7 +196,19 @@ fun GlassesRelayApp(
     val isConnecting = streamState.isConnecting
 
     var rtmpUrl by rememberSaveable { mutableStateOf("rtmp://") }
+    var selectedQuality by rememberSaveable { mutableStateOf("HIGH") }
+    var selectedFps by rememberSaveable { mutableStateOf(30) }
+
     var isFullScreen by remember { mutableStateOf(false) }
+    var showFullScreenControls by remember { mutableStateOf(true) }
+
+    // Auto-hide full-screen controls
+    LaunchedEffect(showFullScreenControls, isFullScreen) {
+        if (isFullScreen && showFullScreenControls) {
+            delay(3000L)
+            showFullScreenControls = false
+        }
+    }
 
     // Set system bars to transparent and handle edge-to-edge
     val view = LocalView.current
@@ -215,7 +230,7 @@ fun GlassesRelayApp(
         val permissionStatus = result.getOrDefault(PermissionStatus.Denied)
         android.widget.Toast.makeText(activity, "Status: $permissionStatus", android.widget.Toast.LENGTH_LONG).show()
         if (permissionStatus == PermissionStatus.Granted) {
-            onStartStream(rtmpUrl)
+            onStartStream(rtmpUrl, selectedQuality, selectedFps)
         } else {
             Log.e("GlassesRelay", "Meta Camera Permission denied: $permissionStatus")
         }
@@ -254,6 +269,15 @@ fun GlassesRelayApp(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
+                StreamSettingsCard(
+                    selectedQuality = selectedQuality,
+                    onQualityChange = { selectedQuality = it },
+                    selectedFps = selectedFps,
+                    onFpsChange = { selectedFps = it },
+                    enabled = !isStreaming && !isConnecting
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
                 AnimatedVisibility(
                     visible = isConnected,
                     enter = fadeIn(tween(400)),
@@ -287,7 +311,10 @@ fun GlassesRelayApp(
                                     
                                     // Expand button
                                     IconButton(
-                                        onClick = { isFullScreen = true },
+                                        onClick = { 
+                                            isFullScreen = true 
+                                            showFullScreenControls = true
+                                        },
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .padding(12.dp)
@@ -335,13 +362,18 @@ fun GlassesRelayApp(
             }
         }
 
-        // Full Screen Overlay
         if (isFullScreen && streamState.latestFrame != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
                     .zIndex(100f)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        showFullScreenControls = !showFullScreenControls
+                    }
             ) {
                 Image(
                     bitmap = streamState.latestFrame!!.asImageBitmap(),
@@ -350,19 +382,25 @@ fun GlassesRelayApp(
                     contentScale = ContentScale.Fit // Fit entire video in full screen
                 )
                 
-                // Close button
-                IconButton(
-                    onClick = { isFullScreen = false },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 48.dp, end = 24.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                // Exit button
+                AnimatedVisibility(
+                    visible = showFullScreenControls,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomEnd) // Moved to bottom-right
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.FullscreenExit,
-                        contentDescription = "Exit Full Screen",
-                        tint = Color.White
-                    )
+                    IconButton(
+                        onClick = { isFullScreen = false },
+                        modifier = Modifier
+                            .padding(bottom = 48.dp, end = 24.dp) // Adjusted padding for bottom-right
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FullscreenExit,
+                            contentDescription = "Exit Full Screen",
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }
@@ -509,6 +547,76 @@ private fun ConnectionCard(
                     else "Authorize Glasses via Meta AI",
                     style = MaterialTheme.typography.labelLarge
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamSettingsCard(
+    selectedQuality: String,
+    onQualityChange: (String) -> Unit,
+    selectedFps: Int,
+    onFpsChange: (Int) -> Unit,
+    enabled: Boolean
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = CyanAccent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Stream Configuration",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Quality Selection
+            Text("Video Quality", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("LOW", "MEDIUM", "HIGH").forEach { quality ->
+                    val isSelected = selectedQuality == quality
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { if (enabled) onQualityChange(quality) },
+                        label = { Text(quality) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyanAccent,
+                            selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // FPS Selection
+            Text("Target FPS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(15, 30, 60).forEach { fps ->
+                    val isSelected = selectedFps == fps
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { if (enabled) onFpsChange(fps) },
+                        label = { Text("$fps FPS") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyanAccent,
+                            selectedLabelColor = Color.Black
+                        )
+                    )
+                }
             }
         }
     }

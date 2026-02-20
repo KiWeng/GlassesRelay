@@ -60,6 +60,8 @@ class StreamingService : Service(), ConnectChecker {
         private const val AUDIO_SAMPLE_RATE = 44100
 
         const val EXTRA_RTMP_URL = "extra_rtmp_url"
+        const val EXTRA_VIDEO_QUALITY = "extra_video_quality" // "LOW", "MEDIUM", "HIGH"
+        const val EXTRA_VIDEO_FPS = "extra_video_fps"
         const val ACTION_STOP = "com.example.glassesrelay.STOP_STREAM"
     }
 
@@ -109,6 +111,9 @@ class StreamingService : Service(), ConnectChecker {
         }
 
         val rtmpUrl = intent?.getStringExtra(EXTRA_RTMP_URL)
+        val qualityStr = intent?.getStringExtra(EXTRA_VIDEO_QUALITY) ?: "HIGH"
+        val fps = intent?.getIntExtra(EXTRA_VIDEO_FPS, 30) ?: 30
+
         if (rtmpUrl.isNullOrBlank()) {
             Log.e(TAG, "No RTMP URL provided")
             stopSelf()
@@ -130,7 +135,7 @@ class StreamingService : Service(), ConnectChecker {
         } else {
             startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
         }
-        startStreaming(rtmpUrl)
+        startStreaming(rtmpUrl, qualityStr, fps)
         return START_NOT_STICKY
     }
 
@@ -144,20 +149,20 @@ class StreamingService : Service(), ConnectChecker {
     //  Streaming pipeline
     // ─────────────────────────────────────────────────────────────────
 
-    private fun startStreaming(rtmpUrl: String) {
+    private fun startStreaming(rtmpUrl: String, qualityStr: String, fps: Int) {
         if (_streamState.value.isStreaming || _streamState.value.isConnecting) return
 
         _streamState.value = StreamState(isConnecting = true, statusMessage = "Initializing Camera…")
 
         // Skip RTMP for now, just start the camera directly
-        startDatCameraSession()
+        startDatCameraSession(qualityStr, fps)
     }
 
     /**
      * After RTMP connection is established, start the DAT camera session
      * and begin relaying frames.
      */
-    private fun startDatCameraSession() {
+    private fun startDatCameraSession(qualityStr: String, fps: Int) {
         serviceScope.launch {
             try {
                 // Check if glasses are connected
@@ -169,11 +174,19 @@ class StreamingService : Service(), ConnectChecker {
                     return@launch
                 }
 
-                // Configure stream: HIGH quality compiles, so reverting to it
+                val quality = when (qualityStr.uppercase()) {
+                    "LOW" -> VideoQuality.LOW
+                    "MEDIUM" -> VideoQuality.MEDIUM
+                    else -> VideoQuality.HIGH
+                }
+
+                // Configure stream based on user settings
                 val config = StreamConfiguration(
-                    videoQuality = VideoQuality.HIGH,
-                    frameRate = 30
+                    videoQuality = quality,
+                    frameRate = fps
                 )
+
+                Log.d(TAG, "Starting stream with Quality: $quality, FPS: $fps")
 
                 // Start stream session using AutoDeviceSelector
                 val session = Wearables.startStreamSession(

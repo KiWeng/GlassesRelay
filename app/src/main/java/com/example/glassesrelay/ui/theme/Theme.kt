@@ -1,6 +1,5 @@
 package com.example.glassesrelay.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -9,35 +8,60 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = BluePrimary,
+    onPrimary = Color.White,
+    primaryContainer = BluePrimaryDark,
+    onPrimaryContainer = CyanAccentMuted,
+    secondary = CyanAccent,
+    onSecondary = Color.Black,
+    secondaryContainer = SurfaceContainerHigh,
+    onSecondaryContainer = CyanAccent,
+    tertiary = TertiaryViolet,
+    onTertiary = Color.Black,
+    background = SurfaceDark,
+    onBackground = OnSurfaceLight,
+    surface = SurfaceDark,
+    onSurface = OnSurfaceLight,
+    surfaceVariant = SurfaceContainer,
+    onSurfaceVariant = OnSurfaceMuted,
+    surfaceContainerLowest = SurfaceDark,
+    surfaceContainerLow = SurfaceContainer,
+    surfaceContainer = SurfaceContainer,
+    surfaceContainerHigh = SurfaceContainerHigh,
+    surfaceContainerHighest = SurfaceContainerHighest,
+    outline = OnSurfaceDim,
+    outlineVariant = SurfaceContainerHighest,
+    error = ErrorPink,
+    onError = Color.Black,
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+    primary = BluePrimary,
     onPrimary = Color.White,
+    primaryContainer = Color(0xFFD6E3FF),
+    onPrimaryContainer = BluePrimaryDark,
+    secondary = Color(0xFF006A6A),
     onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    tertiary = TertiaryViolet,
+    background = Color(0xFFF8FAFC),
+    onBackground = Color(0xFF1E293B),
+    surface = Color(0xFFF8FAFC),
+    onSurface = Color(0xFF1E293B),
+    surfaceVariant = Color(0xFFE2E8F0),
+    onSurfaceVariant = Color(0xFF475569),
+    outline = Color(0xFF94A3B8),
+    error = ErrorPink,
+    onError = Color.White,
 )
 
 @Composable
 fun GlassesRelayTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false, // disabled so custom palette is always applied
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -45,7 +69,6 @@ fun GlassesRelayTheme(
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }

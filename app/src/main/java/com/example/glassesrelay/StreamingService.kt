@@ -99,6 +99,8 @@ class StreamingService : Service(), ConnectChecker {
     private var currentQuality: String = "HIGH"
     private var currentFps: Int = 30
 
+    private var nv21Buffer: ByteArray? = null
+
     // ─────────────────────────────────────────────────────────────────
     //  Lifecycle
     // ─────────────────────────────────────────────────────────────────
@@ -298,9 +300,14 @@ class StreamingService : Service(), ConnectChecker {
 
     // Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
     private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
-        val output = ByteArray(input.size)
         val size = width * height
         val quarter = size / 4
+        val requiredSize = input.size
+
+        if (nv21Buffer == null || nv21Buffer!!.size != requiredSize) {
+            nv21Buffer = ByteArray(requiredSize)
+        }
+        val output = nv21Buffer!!
 
         input.copyInto(output, 0, 0, size) // Y is the same
 

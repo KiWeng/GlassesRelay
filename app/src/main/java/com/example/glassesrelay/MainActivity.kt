@@ -10,81 +10,41 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import androidx.activity.ComponentActivity
+import android.util.Log
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.BluetoothConnected
-import androidx.compose.material.icons.filled.CellTower
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.*
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
-import com.example.glassesrelay.ui.theme.CyanAccent
-import com.example.glassesrelay.ui.theme.GlassesRelayTheme
-import com.example.glassesrelay.ui.theme.StatusAmber
-import com.example.glassesrelay.ui.theme.StatusGreen
-import com.example.glassesrelay.ui.theme.StatusRed
+import androidx.core.view.WindowCompat
+import com.example.glassesrelay.ui.theme.*
 import com.meta.wearable.dat.core.Wearables
+import com.meta.wearable.dat.core.types.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -92,8 +52,8 @@ import androidx.lifecycle.lifecycleScope
 
 class MainActivity : ComponentActivity() {
 
-    private val bluetoothPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
 
     // ── Service binding ─────────────────────────────────────────────
     private var streamingService: StreamingService? = null
@@ -124,9 +84,12 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        
+        // wearables initialization
         Wearables.initialize(this)
-        requestBluetoothPermissionIfNeeded()
+        requestPermissionsIfNeeded()
 
         setContent {
             GlassesRelayTheme {
@@ -184,14 +147,22 @@ class MainActivity : ComponentActivity() {
         startService(stopIntent)
     }
 
-    private fun requestBluetoothPermissionIfNeeded() {
+    private fun requestPermissionsIfNeeded() {
+        val permissions = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(
-                    this, Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
-            }
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+        val missingPermissions = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingPermissions.isNotEmpty()) {
+            permissionLauncher.launch(missingPermissions.toTypedArray())
         }
     }
 }
@@ -222,67 +193,178 @@ fun GlassesRelayApp(
     val isConnecting = streamState.isConnecting
 
     var rtmpUrl by rememberSaveable { mutableStateOf("rtmp://") }
+    var isFullScreen by remember { mutableStateOf(false) }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets(0)
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AppHeader(isConnected = isConnected)
-            Spacer(modifier = Modifier.height(28.dp))
+    // Set system bars to transparent and handle edge-to-edge
+    val view = LocalView.current
+    val darkTheme = isSystemInDarkTheme()
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            // On OnePlus/ColorOS, we want to ensure icons are readable.
+            val insetsController = WindowCompat.getInsetsController(window, view)
+            insetsController.isAppearanceLightStatusBars = !darkTheme
+            insetsController.isAppearanceLightNavigationBars = !darkTheme
+        }
+    }
 
-            ConnectionCard(
-                isConnected = isConnected,
-                deviceName = deviceName,
-                registrationStatus = registrationState.toString(),
-                onAuthorize = { Wearables.startRegistration(activity) }
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+    // Launcher for Meta SDK Camera Permission
+    val metaCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = Wearables.RequestPermissionContract()
+    ) { result ->
+        val permissionStatus = result.getOrDefault(PermissionStatus.Denied)
+        android.widget.Toast.makeText(activity, "Status: $permissionStatus", android.widget.Toast.LENGTH_LONG).show()
+        if (permissionStatus == PermissionStatus.Granted) {
+            onStartStream(rtmpUrl)
+        } else {
+            Log.e("GlassesRelay", "Meta Camera Permission denied: $permissionStatus")
+        }
+    }
 
-            RtmpConfigCard(
-                rtmpUrl = rtmpUrl,
-                onUrlChange = { rtmpUrl = it },
-                enabled = !isStreaming && !isConnecting
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            AnimatedVisibility(
-                visible = isConnected,
-                enter = fadeIn(tween(400)),
-                exit = fadeOut(tween(300))
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = Color.Transparent, // Let the background show through
+            contentWindowInsets = WindowInsets(0)
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .statusBarsPadding() // Push content below status bar
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                StreamStatusCard(
-                    isStreaming = isStreaming,
-                    isConnecting = isConnecting,
-                    fps = streamState.fps,
-                    statusMessage = streamState.statusMessage,
-                    errorMessage = streamState.errorMessage
-                )
-            }
-            Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(8.dp)) // Small extra gap
+                AppHeader(isConnected = isConnected)
+                Spacer(modifier = Modifier.height(28.dp))
 
-            StreamControlButton(
-                isStreaming = isStreaming,
-                isConnecting = isConnecting,
-                enabled = isConnected && rtmpUrl.length > 7,
-                onClick = {
-                    if (isStreaming || isConnecting) {
-                        onStopStream()
-                    } else {
-                        onStartStream(rtmpUrl)
+                ConnectionCard(
+                    isConnected = isConnected,
+                    deviceName = deviceName,
+                    registrationStatus = registrationState.toString(),
+                    onAuthorize = { Wearables.startRegistration(activity) }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                RtmpConfigCard(
+                    rtmpUrl = rtmpUrl,
+                    onUrlChange = { rtmpUrl = it },
+                    enabled = !isStreaming && !isConnecting
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                AnimatedVisibility(
+                    visible = isConnected,
+                    enter = fadeIn(tween(400)),
+                    exit = fadeOut(tween(300))
+                ) {
+                    Column {
+                        StreamStatusCard(
+                            isStreaming = isStreaming,
+                            isConnecting = isConnecting,
+                            fps = streamState.fps,
+                            statusMessage = streamState.statusMessage,
+                            errorMessage = streamState.errorMessage
+                        )
+                        
+                        if (isStreaming && streamState.latestFrame != null) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(400.dp),
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    Image(
+                                        bitmap = streamState.latestFrame!!.asImageBitmap(),
+                                        contentDescription = "Live Video Stream",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    
+                                    // Expand button
+                                    IconButton(
+                                        onClick = { isFullScreen = true },
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(12.dp)
+                                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Fullscreen,
+                                            contentDescription = "Full Screen",
+                                            tint = Color.White
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(24.dp))
+
+                StreamControlButton(
+                    isStreaming = isStreaming,
+                    isConnecting = isConnecting,
+                    enabled = isConnected,
+                    registrationState = registrationState,
+                    onClick = {
+                        if (isStreaming || isConnecting) {
+                            onStopStream()
+                        } else {
+                            if (registrationState is RegistrationState.Registered) {
+                                // Request Meta SDK camera permission before starting the stream
+                                metaCameraPermissionLauncher.launch(Permission.CAMERA)
+                            } else {
+                                // Launch the Meta SDK Registration flow
+                                Wearables.startRegistration(activity)
+                            }
+                        }
+                    }
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                // ... 
+                Spacer(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .navigationBarsPadding() // Safe area for navigation bar
+                )
+            }
+        }
+
+        // Full Screen Overlay
+        if (isFullScreen && streamState.latestFrame != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .zIndex(100f)
+            ) {
+                Image(
+                    bitmap = streamState.latestFrame!!.asImageBitmap(),
+                    contentDescription = "Full Screen Live Video",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit // Fit entire video in full screen
+                )
+                
+                // Close button
+                IconButton(
+                    onClick = { isFullScreen = false },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 48.dp, end = 24.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FullscreenExit,
+                        contentDescription = "Exit Full Screen",
+                        tint = Color.White
+                    )
+                }
+            }
         }
     }
 }
@@ -612,6 +694,7 @@ private fun StreamControlButton(
     isStreaming: Boolean,
     isConnecting: Boolean,
     enabled: Boolean,
+    registrationState: RegistrationState,
     onClick: () -> Unit
 ) {
     val isActive = isStreaming || isConnecting
@@ -648,6 +731,7 @@ private fun StreamControlButton(
             text = when {
                 isStreaming -> "Stop Streaming"
                 isConnecting -> "Cancel"
+                registrationState !is RegistrationState.Registered -> "Register Device First"
                 else -> "Start Streaming"
             },
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)

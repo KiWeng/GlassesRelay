@@ -6,12 +6,16 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Network for RTMP streaming -->
+    <!-- Network for RTMP streaming and Wi-Fi Direct for Meta DAT SDK -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />
 
     <!-- Foreground service to keep streaming alive -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <application
@@ -60,7 +64,7 @@
         <service
             android:name=".StreamingService"
             android:exported="false"
-            android:foregroundServiceType="camera|connectedDevice" />
+            android:foregroundServiceType="camera|microphone|connectedDevice" />
 
     </application>
 

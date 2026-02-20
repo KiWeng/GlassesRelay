@@ -10,14 +10,17 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.ImageFormat
 import android.graphics.Rect
+import android.graphics.YuvImage
+import android.os.Build
+import java.io.ByteArrayOutputStream
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import android.view.Surface
 import com.pedro.common.ConnectChecker
-import com.pedro.encoder.input.sources.audio.NoAudioSource
-import com.pedro.encoder.input.sources.video.NoVideoSource
 import com.pedro.library.rtmp.RtmpStream
 import com.meta.wearable.dat.camera.StreamSession
 import com.meta.wearable.dat.camera.startStreamSession
@@ -73,7 +76,8 @@ class StreamingService : Service(), ConnectChecker {
         val isConnecting: Boolean = false,
         val fps: Int = 0,
         val statusMessage: String = "Idle",
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val latestFrame: Bitmap? = null
     )
 
     private val _streamState = MutableStateFlow(StreamState())
@@ -111,7 +115,21 @@ class StreamingService : Service(), ConnectChecker {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            startForeground(
+                NOTIFICATION_ID, 
+                buildNotification("Connecting…"), 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID, 
+                buildNotification("Connecting…"), 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+        }
         startStreaming(rtmpUrl)
         return START_NOT_STICKY
     }
@@ -129,40 +147,10 @@ class StreamingService : Service(), ConnectChecker {
     private fun startStreaming(rtmpUrl: String) {
         if (_streamState.value.isStreaming || _streamState.value.isConnecting) return
 
-        _streamState.value = StreamState(isConnecting = true, statusMessage = "Initializing…")
+        _streamState.value = StreamState(isConnecting = true, statusMessage = "Initializing Camera…")
 
-        try {
-            // 1. Create RtmpStream with NoVideoSource (we'll draw frames manually)
-            //    and NoAudioSource (glasses stream is video-only for RTMP relay)
-            val stream = RtmpStream(
-                this,
-                this,
-                NoVideoSource(),   // video: we draw frames to the encoder surface manually
-                NoAudioSource()    // audio: no audio needed for video relay
-            ).also {
-                rtmpStream = it
-            }
-
-            // 2. Prepare video encoder: 720×1280 @ 2.5 Mbps, 30 FPS
-            val videoPrepared = stream.prepareVideo(VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_BITRATE)
-            // Prepare audio with NoAudioSource (required by RtmpStream even if unused)
-            stream.prepareAudio(AUDIO_SAMPLE_RATE, true, 128_000)
-
-            if (!videoPrepared) {
-                _streamState.value = StreamState(errorMessage = "Failed to prepare video encoder")
-                stopSelf()
-                return
-            }
-
-            // 3. Connect to RTMP server (async — onConnectionSuccess will start camera)
-            _streamState.value = StreamState(isConnecting = true, statusMessage = "Connecting to RTMP…")
-            stream.startStream(rtmpUrl)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start streaming", e)
-            _streamState.value = StreamState(errorMessage = "Init failed: ${e.message}")
-            stopSelf()
-        }
+        // Skip RTMP for now, just start the camera directly
+        startDatCameraSession()
     }
 
     /**
@@ -181,10 +169,10 @@ class StreamingService : Service(), ConnectChecker {
                     return@launch
                 }
 
-                // Configure stream: HIGH quality (720x1280), 30 FPS
+                // Configure stream: HIGH quality compiles, so reverting to it
                 val config = StreamConfiguration(
                     videoQuality = VideoQuality.HIGH,
-                    frameRate = VIDEO_FPS
+                    frameRate = 30
                 )
 
                 // Start stream session using AutoDeviceSelector
@@ -200,6 +188,22 @@ class StreamingService : Service(), ConnectChecker {
                     statusMessage = "LIVE"
                 )
                 updateNotification("🔴 Streaming LIVE")
+
+                // Observe the stream session state to handle unexpected disconnects
+                serviceScope.launch {
+                    session.state.collect { state ->
+                        Log.d(TAG, "Stream session state changed: $state")
+                        val stateStr = state.toString()
+                        if (stateStr == "CLOSED" || stateStr == "ERROR") {
+                            _streamState.value = _streamState.value.copy(
+                                isStreaming = false,
+                                errorMessage = "Streaming stopped by glasses ($stateStr)",
+                                statusMessage = "Disconnected"
+                            )
+                            stopStreaming()
+                        }
+                    }
+                }
 
                 // Start FPS counter
                 lastFpsTimestamp = System.currentTimeMillis()
@@ -232,48 +236,54 @@ class StreamingService : Service(), ConnectChecker {
     }
 
     /**
-     * Decode a VideoFrame's ByteBuffer into a Bitmap and draw it onto
-     * the encoder's input surface via Canvas.
-     *
-     * VideoFrame contains raw image data as a ByteBuffer.
-     * We decode it to a Bitmap and draw to the MediaCodec input surface.
+     * Decode a VideoFrame's ByteBuffer into a Bitmap and expose it
+     * via the Flow for the UI to preview.
      */
     private fun relayVideoFrame(videoFrame: VideoFrame) {
         try {
-            val stream = rtmpStream ?: return
-
-            // Decode VideoFrame's ByteBuffer to Bitmap
+            // VideoFrame contains raw I420 video data in a ByteBuffer
             val buffer = videoFrame.buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            buffer.rewind()
+            val dataSize = buffer.remaining()
+            val byteArray = ByteArray(dataSize)
 
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+            // Save current position
+            val originalPosition = buffer.position()
+            buffer.get(byteArray)
+            // Restore position
+            buffer.position(originalPosition)
 
-            // Draw bitmap onto the encoder's GL input surface
-            val glInterface = stream.getGlInterface()
-            val encoderSurface = glInterface.getSurfaceTexture()
-            val surface = Surface(encoderSurface)
-            try {
-                val canvas = surface.lockCanvas(null)
-                if (canvas != null) {
-                    canvas.drawBitmap(
-                        bitmap,
-                        null,
-                        Rect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT),
-                        null
-                    )
-                    surface.unlockCanvasAndPost(canvas)
-                    frameCount++
-                }
-            } finally {
-                surface.release()
+            // Convert I420 to NV21 format which is supported by Android's YuvImage
+            val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
+            val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
+            val out = ByteArrayOutputStream().use { stream ->
+                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
+                stream.toByteArray()
             }
 
-            bitmap.recycle()
+            val bitmap = BitmapFactory.decodeByteArray(out, 0, out.size) ?: return
+
+            // Post bitmap to StateFlow for UI to render
+            _streamState.value = _streamState.value.copy(latestFrame = bitmap)
+            frameCount++
+
         } catch (e: Exception) {
-            Log.w(TAG, "Frame relay error", e)
+            Log.w(TAG, "Frame decode error", e)
         }
+    }
+
+    // Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
+    private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
+        val output = ByteArray(input.size)
+        val size = width * height
+        val quarter = size / 4
+
+        input.copyInto(output, 0, 0, size) // Y is the same
+
+        for (n in 0 until quarter) {
+            output[size + n * 2] = input[size + quarter + n] // V first
+            output[size + n * 2 + 1] = input[size + n] // U second
+        }
+        return output
     }
 
     fun stopStreaming() {
@@ -297,7 +307,12 @@ class StreamingService : Service(), ConnectChecker {
         }
         rtmpStream = null
 
-        _streamState.value = StreamState(statusMessage = "Stopped")
+        // Only update status to "Stopped" if we didn't just set an error message
+        if (_streamState.value.errorMessage == null) {
+            _streamState.value = StreamState(statusMessage = "Stopped")
+        } else {
+            _streamState.value = _streamState.value.copy(isStreaming = false, isConnecting = false)
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────

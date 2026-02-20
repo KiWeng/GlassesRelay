@@ -106,6 +106,7 @@ class StreamingService : Service(), ConnectChecker {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        rtmpStream = RtmpStream(this, this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -162,8 +163,17 @@ class StreamingService : Service(), ConnectChecker {
 
         _streamState.value = StreamState(isConnecting = true, statusMessage = "Initializing Camera…")
 
-        // Skip RTMP for now, just start the camera directly
-        startDatCameraSession(qualityStr, fps)
+        if (rtmpStream?.isStreaming != true) {
+            // Note: startDatCameraSession() will be called in onConnectionSuccess()
+            if (rtmpStream?.prepareVideo(VIDEO_WIDTH, VIDEO_HEIGHT, fps, VIDEO_BITRATE, 0) == true &&
+                rtmpStream?.prepareAudio(AUDIO_SAMPLE_RATE, true, 128 * 1024) == true
+            ) {
+                rtmpStream?.startStream(rtmpUrl)
+            } else {
+                _streamState.value = StreamState(errorMessage = "Error preparing stream")
+                stopStreaming()
+            }
+        }
     }
 
     /**

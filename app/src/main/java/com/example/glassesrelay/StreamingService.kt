@@ -119,8 +119,8 @@ class StreamingService : Service(), ConnectChecker {
         val qualityStr = intent?.getStringExtra(EXTRA_VIDEO_QUALITY) ?: "HIGH"
         val fps = intent?.getIntExtra(EXTRA_VIDEO_FPS, 30) ?: 30
 
-        if (rtmpUrl.isNullOrBlank()) {
-            Log.e(TAG, "No RTMP URL provided")
+        if (!isValidRtmpUrl(rtmpUrl)) {
+            Log.e(TAG, "Invalid or missing RTMP URL")
             stopSelf()
             return START_NOT_STICKY
         }
